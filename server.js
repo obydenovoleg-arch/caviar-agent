@@ -9,7 +9,6 @@ app.use(express.json());
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// subscriber_id -> message history
 const conversations = new Map();
 
 const SYSTEM_PROMPT = `You are a sales assistant for Cape Caviar — a premium black caviar brand delivering across South Africa. You speak with customers via Instagram DM.
@@ -52,7 +51,7 @@ async function createPaystackLink(email, amountRand, description) {
     'https://api.paystack.co/transaction/initialize',
     {
       email,
-      amount: Math.round(amountRand * 100), // Paystack uses cents (kobo)
+      amount: Math.round(amountRand * 100),
       reference,
       metadata: { order: description }
     },
@@ -78,7 +77,6 @@ app.post('/webhook', async (req, res) => {
     const history = conversations.get(subscriber_id);
     history.push({ role: 'user', content: message });
 
-    // Keep last 20 messages to manage token usage
     const trimmedHistory = history.slice(-20);
 
     const aiResponse = await anthropic.messages.create({
@@ -92,7 +90,6 @@ app.post('/webhook', async (req, res) => {
     let visibleReply = fullReply;
     let paymentUrl = '';
 
-    // Check if order is complete
     const orderMatch = fullReply.match(/<<<ORDER_COMPLETE>>>([\s\S]*?)<<<END_ORDER>>>/);
     if (orderMatch) {
       try {
@@ -107,12 +104,10 @@ app.post('/webhook', async (req, res) => {
           `Cape Caviar: ${itemsSummary}`
         );
 
-        // Strip the JSON block from what the customer sees
         visibleReply = fullReply
           .replace(/<<<ORDER_COMPLETE>>>[\s\S]*?<<<END_ORDER>>>/, '')
           .trim();
 
-        // Reset conversation after order is placed
         conversations.set(subscriber_id, []);
 
         console.log(`Order placed for ${subscriber_id}: ${itemsSummary} — R${orderData.total}`);
@@ -120,13 +115,22 @@ app.post('/webhook', async (req, res) => {
         console.error('Order processing error:', e.message);
       }
     } else {
-      // Save assistant reply to history
       history.push({ role: 'assistant', content: fullReply });
     }
 
+    const messages = [{ type: 'text', text: visibleReply }];
+
+    if (paymentUrl) {
+      messages.push({
+        type: 'text',
+        text: 'Tap below to pay securely:',
+        buttons: [{ type: 'url', caption: '💳 Pay now', url: paymentUrl }],
+      });
+    }
+
     res.json({
-      reply: visibleReply,
-      payment_url: paymentUrl,
+      version: 'v2',
+      content: { messages },
     });
   } catch (err) {
     console.error('Webhook error:', err.message);
